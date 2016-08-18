@@ -64,6 +64,29 @@ for vm in $(virsh list --name); do
 	unset imgsbackup
 
 	# VM-Definition ebenfalls sichern
-	cp -f ${XML}/${vm}.xml ${DST}/${vm}/
+    virsh dumpxml ${vm} > ${DST}/${vm}/domain.xml
+done
+
+# Inaktive VMs sichern
+for vm in $(virsh list --name --inactive); do
+    unset imgs
+    echo "-----------------------------------------------------------------------------"
+    echo "Backup KVM guest '${vm}'"
+
+    # Liste der Plattennamen und Imagepfade holen
+    declare -A imgs
+    eval $(virsh domblklist ${vm} --details | awk '/disk/ {print "imgs["$3"]="$4}')
+    
+    # ursprüngliche Images der VM wegkopieren
+    for img in ${imgs[@]}; do
+        mkdir -p ${DST}/${vm}/
+        if [ -f ${DST}/${vm}/$(basename ${img}) ]; then
+        	rsync --inplace ${img} ${DST}/${vm}/
+	else
+        	rsync --sparse ${img} ${DST}/${vm}/
+	fi
+    done
+    # VM-Definition ebenfalls sichern
+    virsh dumpxml ${vm} > ${DST}/${vm}/domain.xml
 done
 exit 0
