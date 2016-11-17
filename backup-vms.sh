@@ -1,10 +1,40 @@
 #!/bin/bash
 
-DIR=/var/lib/libvirt/images
-XML=/etc/libvirt/qemu
-DST=/var/backups/kvmvms
+CONFIG=/etc/backup-vms.conf
 
+# ============================================================================
+
+if [[ ! -f $CONFIG ]]; then
+    echo Config file $CONFIG not found.
+    exit 1
+fi
+source $CONFIG
+
+#
+# Config sanity checks
+#
+for var in DIR XML DST; do
+    [ -z "${!var}" ] && echo "${var} is not set" && exit 1
+done
+if [ -n "$DSTEXT" ]; then
+    [ -z "$PASSPHRASE" ] && echo "PASSPHRASE is not set" && exit 1
+    [ ! -f "${PASSPHRASE}" ] && echo "PASSPHRASE file not found" && exit 1
+    [ -z "$(which 7z)" ] && echo "7z not found" && exit 1
+fi
+for var in OFFLINE BACKUPDIRS TASKS; do
+    if [[ ! "$(declare -p $var 2> /dev/null)" =~ "declare -a" ]]; then
+        echo "$var must be an array"
+        exit 1
+    fi
+done
+for dir in ${BACKUPDIRS[@]}; do
+    [ ! -d "$dir" ] && echo "BACKUPDIRS $dir not found" && exit 1
+done
+
+
+DATE=$(date +%Y%M%d)
 LOCK=/var/lock/${0##*/}
+
 if ! mkdir $LOCK 2>/dev/null; then
     echo Already running or stale lock ${LOCK} exists. >&2
     exit 1
@@ -14,86 +44,210 @@ trap -- "rmdir $LOCK" EXIT
 [[ -d ${DIR} ]] || exit 1
 [[ -d ${DST} ]] || mkdir -p ${DST}
 
-# Aktive VMs sichern
-for vm in $(virsh list --name); do
-    unset imgs
-    unset imgsnew
+rm -f ${DST}/LATEST_*
+if [[ -n "$DSTEXT" ]]; then
+    rm -f ${DSTEXT}/LATEST_*
+fi
 
-    echo "-----------------------------------------------------------------------------"
-    echo "Backup KVM guest '${vm}'"
+#
+# Helper that draws a line
+#
+function draw_line() {
+    echo "-------------------------------------------------------------------"
+}
 
-    # Liste der Plattennamen und Imagepfade holen
-    declare -A imgs
-    eval $(virsh domblklist ${vm} --details | awk '/disk/ {print "imgs["$3"]="$4}')
+#
+# Backup running guests
+#
+function run_online() {
+    for vm in $(virsh list --name); do
+        for exc in ${OFFLINE[@]}; do
+            if [[ "${vm}" == "${exc}" ]]; then
+                continue 2
+            fi
+        done
 
-    # testen, ob bereits ein Image-File mit .backup vorhanden ist
-    for img in ${imgs[@]}; do
-        # Endung wegschneiden, da Snapshot mit Basename + .backup angelegt wird
-        img=${img%@(.img|.qcow2)}
-        [ -f ${img}.backup ] && echo ${img}.backup aus VM ${vm} ist bereits vorhanden && continue 2
-    done
+        unset imgs
+        unset imgsnew
 
-    # Snapshots aller Platten der VM erzeugen
-    virsh snapshot-create-as ${vm} backup --disk-only --atomic --no-metadata --quiesce
-    
-    # Namen der erstellen Backup-Files für späteres Löschen merken
-    declare -A imgsbackup
-    eval $(virsh domblklist ${vm} --details | awk '/disk/ {print "imgsbackup["$3"]="$4}')
+        draw_line
+        echo "Backup KVM guest '${vm}'"
 
-    # ursprüngliche Images der VM wegkopieren
-    for img in ${imgs[@]}; do
-        mkdir -p ${DST}/${vm}/
-        if [ -f ${DST}/${vm}/$(basename ${img}) ]; then
-            rsync --inplace ${img} ${DST}/${vm}/
-        else
+        # Get list of disk names and image paths
+        declare -A imgs
+        eval $(virsh domblklist ${vm} --details \
+                | awk '/disk/ {print "imgs["$3"]="$4}')
+
+        # Test if there exists already a file with extension .backup
+        for img in ${imgs[@]}; do
+            # Skip suffix as it will already be created with basename + backup
+            img=${img%@(.img|.qcow2)}
+            if [[ -f ${img}.backup ]]; then
+                echo "${img}.backup from VM ${vm} already exists"
+                continue 2
+            fi
+        done
+
+        # Create snapshots for all disks
+        virsh snapshot-create-as ${vm} backup \
+            --disk-only --atomic --no-metadata --quiesce
+        
+        # Remember backup file names for future removal
+        declare -A imgsbackup
+        eval $(virsh domblklist ${vm} --details \
+            | awk '/disk/ {print "imgsbackup["$3"]="$4}')
+
+        # Backup original disk image of the VM
+        for img in ${imgs[@]}; do
+            mkdir -p ${DST}/${vm}/
+            touch ${DST}/${vm}
+            if [[ -f ${DST}/${vm}/$(basename ${img}) ]]; then
+                rm ${DST}/${vm}/$(basename ${img})
+            fi
             rsync --sparse ${img} ${DST}/${vm}/
-        fi
-    done
+        done
 
-    # Snapshot in ursprüngliche Platten einarbeiten
-    for disc in ${!imgs[@]}; do
-        virsh blockcommit ${vm} ${disc} --active --wait --pivot
-    done
+        # Merge snapshot file with original disk image
+        for disc in ${!imgs[@]}; do
+            virsh blockcommit ${vm} ${disc} --active --wait --pivot
+        done
 
-    # testen, ob alle Platten wieder "original" sind
-    declare -A imgsnew
-    eval $(virsh domblklist ${vm} --details | awk '/disk/ {print "imgsnew["$3"]="$4}')
-    for disc in ${!imgsnew[@]}; do
-        [ ${imgs[$disc]} != ${imgsnew[$disc]} ] && echo Fehler beim Einarbeiten des Snapshots von  ${vm} ${disc} && continue 2
-    done
+        # Test if all original disks are back in place
+        declare -A imgsnew
+        eval $(virsh domblklist ${vm} --details | \
+            awk '/disk/ {print "imgsnew["$3"]="$4}')
+        for disc in ${!imgsnew[@]}; do
+            if [[ ${imgs[$disc]} != ${imgsnew[$disc]} ]]; then
+                echo "Error while writing snapshot for VM ${vm} ${disc}"
+                continue 2
+            fi
+        done
 
-    # löschen der nicht mehr benötigten Snapshots
-    for img in ${imgsbackup[@]}; do
-        fuser -s ${img} || rm ${img}
-    done
-    unset imgsbackup
+        # Remove orphaned backup snapshot files
+        for img in ${imgsbackup[@]}; do
+            fuser -s ${img} || rm ${img}
+        done
+        unset imgsbackup
 
-    # VM-Definition ebenfalls sichern
-    virsh dumpxml ${vm} > ${DST}/${vm}/domain.xml
+        # Save XML VM definition file
+        virsh dumpxml ${vm} > ${DST}/${vm}/domain.xml
+    done
+}
+
+#
+# Shutdown guests that need to be ofline for a backup
+#
+function shutdown_offline() {
+    draw_line
+    declare -i count
+
+    for exc in ${OFFLINE[@]}; do
+        virsh shutdown ${exc}
+        while true; do
+            virsh list | grep "${exc}" >/dev/null 2>&1
+            if [[ "$?" -eq 1 ]]; then
+                break
+            fi
+            sleep 5
+
+            let count=${count}+1
+
+            if [[ ${count} -gt 300 ]]; then
+                echo "Failed to shutdown guest ${exc}"
+
+                exit 1
+            fi
+        done
+    done
+}
+
+
+#
+# Backup inactive VMs
+#
+function run_offline() {
+    shutdown_offline
+
+    for vm in $(virsh list --name --inactive); do
+        unset imgs
+        draw_line
+        echo "Backup KVM guest '${vm}'"
+
+        # Get list of image names and paths
+        declare -A imgs
+        eval $(virsh domblklist ${vm} --details \
+               | awk '/disk/ {print "imgs["$3"]="$4}')
+        
+        # Backup original disk image of the VM
+        for img in ${imgs[@]}; do
+            mkdir -p ${DST}/${vm}/
+            touch ${DST}/${vm}
+            if [[ -f ${DST}/${vm}/$(basename ${img}) ]]; then
+                rm ${DST}/${vm}/$(basename ${img})
+            fi
+            rsync --sparse ${img} ${DST}/${vm}/
+        done
+        # Save XML VM definition file
+        virsh dumpxml ${vm} > ${DST}/${vm}/domain.xml
+
+        for exc in ${OFFLINE[@]}; do
+            if [[ "${vm}" == "${exc}" ]]; then
+                virsh start ${exc}
+            fi
+        done
+    done
+}
+
+#
+# Encrypt disk image files and copy them to the NFS volume
+#
+function encrypt() {
+    # Enrypt and copy to $DSTEXT
+    for vm in $(virsh list --name --all); do
+        draw_line
+        echo "Compress and encrypt data '${vm}'"
+
+        (
+            cd ${DST}
+            [[ -f ${vm}.tar.7z ]] && rm -f ${vm}.tar.7z
+            tar cf - --sparse ${vm} | \
+                7z a -si -m0=lzma2 -mx=3 -bso0 -bsp0 -p$(< ${PASSPHRASE}) \
+                    ${vm}.tar.7z
+        )
+
+        echo "Copy 7z file to $DSTEXT"
+        cp -f ${DST}/${vm}.tar.7z ${DSTEXT}/
+    done
+}
+
+#
+# Backup some local directories and copy them to $DSTEXT
+#
+function backup_local_dirs() {
+    for dir in ${BACKUPDIRS[@]}; do
+        draw_line
+        echo "Backup '${dir}'"
+        dirname=$(basename ${dir})
+
+        [[ -f ${DST}/${dirname}.tar.7z ]] && rm -f ${DST}/${dirname}.tar.7z
+
+        tar cpf - ${dir} 2>/dev/null | \
+            7z a -si -m0=lzma2 -mx=3 -bso0 -bsp0 -p$(< ${PASSPHRASE}) \
+                ${DST}/${dirname}.tar.7z
+
+        echo "Copy 7z file to $DSTEXT"
+        cp -f ${DST}/${dirname}.tar.7z ${DSTEXT}/
+    done
+}
+
+for task in ${TASKS[@]}; do
+    eval "${task}"
 done
 
-# Inaktive VMs sichern
-for vm in $(virsh list --name --inactive); do
-    unset imgs
-    echo "-----------------------------------------------------------------------------"
-    echo "Backup KVM guest '${vm}'"
+touch ${DST}/LATEST_${DATE}
+touch ${DSTEXT}/LATEST_${DATE}
 
-    # Liste der Plattennamen und Imagepfade holen
-    declare -A imgs
-    eval $(virsh domblklist ${vm} --details | awk '/disk/ {print "imgs["$3"]="$4}')
-    
-    # ursprüngliche Images der VM wegkopieren
-    for img in ${imgs[@]}; do
-        mkdir -p ${DST}/${vm}/
-        if [ -f ${DST}/${vm}/$(basename ${img}) ]; then
-            rsync --inplace ${img} ${DST}/${vm}/
-        else
-            rsync --sparse ${img} ${DST}/${vm}/
-        fi
-    done
-    # VM-Definition ebenfalls sichern
-    virsh dumpxml ${vm} > ${DST}/${vm}/domain.xml
-done
+echo done
 exit 0
 
 # vim: set ai ts=4 sw=4 et sts=4 ft=sh:

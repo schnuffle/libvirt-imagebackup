@@ -1,0 +1,53 @@
+
+### Local directories
+
+# Directory where VM images are located
+DIR=/var/lib/libvirt/images
+
+# Location of XML definition files
+XML=/etc/libvirt/qemu
+
+# local backup target directory
+DST=/var/backups/kvmvms
+
+
+### External backups. Uncomment if used.
+
+# remote backup target directory
+#DSTEXT=/srv/backup/autofs/nfs
+
+# passphrase to encrypt remote backups
+#PASSPHRASE="${DST}/.passphrase"
+
+
+### VMs
+
+# VMs that do not have a Qemu-guest-agent and need to be offline for the backup
+OFFLINE=(
+#    "db.roessner-net.de"
+)
+
+
+### Local directories to backup
+
+# List of local directories on the physical host
+# uncomment or append other directories to backup
+BACKUPDIRS=(
+    "/root"
+    "/etc"
+    "/usr/local"
+    "/var/spool/cron/crontabs"
+#    "/export/packages"
+)
+
+### Tasks to run
+
+# Order matters!
+# (uncomment encrypt and backup_local_dirs if needed)
+TASKS=(
+    "run_online"
+    "run_offline"
+#    "encrypt"
+#    "backup_local_dirs"
+)
+
