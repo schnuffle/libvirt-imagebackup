@@ -24,6 +24,8 @@ CONFIG=/etc/backup-vms.conf
 
 # ============================================================================
 
+if [ ! -n "$BASH" ] ;then echo Please run this script with bash; exit 1; fi
+
 if [[ ! -f $CONFIG ]]; then
     echo Config file $CONFIG not found.
     exit 1
