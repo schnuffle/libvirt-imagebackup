@@ -35,7 +35,7 @@ source $CONFIG
 #
 # Config sanity checks
 #
-for var in DIR XML DST; do
+for var in DST; do
     [ -z "${!var}" ] && echo "${var} is not set" && exit 1
 done
 if [ -n "$DSTEXT" ]; then
@@ -54,7 +54,7 @@ for dir in ${BACKUPDIRS[@]}; do
 done
 
 
-DATE=$(date +%Y%M%d)
+DATE=$(date +%Y%m%d)
 LOCK=/var/lock/${0##*/}
 
 if ! mkdir $LOCK 2>/dev/null; then
@@ -63,7 +63,6 @@ if ! mkdir $LOCK 2>/dev/null; then
 fi
 trap -- "rmdir $LOCK" EXIT
 
-[[ -d ${DIR} ]] || exit 1
 [[ -d ${DST} ]] || mkdir -p ${DST}
 
 rm -f ${DST}/LATEST_*
@@ -267,7 +266,9 @@ for task in ${TASKS[@]}; do
 done
 
 touch ${DST}/LATEST_${DATE}
-touch ${DSTEXT}/LATEST_${DATE}
+if [[ -n "$DSTEXT" ]]; then
+    touch ${DSTEXT}/LATEST_${DATE}
+endif
 
 echo done
 exit 0

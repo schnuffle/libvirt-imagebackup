@@ -1,12 +1,6 @@
 
 ### Local directories
 
-# Directory where VM images are located
-DIR=/var/lib/libvirt/images
-
-# Location of XML definition files
-XML=/etc/libvirt/qemu
-
 # local backup target directory
 DST=/var/backups/kvmvms
 
