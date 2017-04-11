@@ -2,7 +2,7 @@
 
 # Online backup for KVM guests
 
-# Copyright 2016,
+# Copyright 2016, 2017,
 #     Jens Tautenhahn <shogun@tausys.de>
 #     Christian Roessner <c@roessner.co>
 #
@@ -70,11 +70,11 @@ if [[ -n "$DSTEXT" ]]; then
     rm -f ${DSTEXT}/LATEST_*
 fi
 
+# 
+# Logline
 #
-# Helper that draws a line
-#
-function draw_line() {
-    echo "-------------------------------------------------------------------"
+function logline() {
+    echo $(date -R) "$*"
 }
 
 #
@@ -91,8 +91,7 @@ function run_online() {
         unset imgs
         unset imgsnew
 
-        draw_line
-        echo "Backup KVM guest '${vm}'"
+        logline "Backup KVM online guest '${vm}'"
 
         # Get list of disk names and image paths
         declare -A imgs
@@ -104,7 +103,7 @@ function run_online() {
             # Skip suffix as it will already be created with basename + backup
             img=${img%@(.img|.qcow2)}
             if [[ -f ${img}.backup ]]; then
-                echo "${img}.backup from VM ${vm} already exists"
+                logline "${img}.backup from VM ${vm} already exists"
                 continue 2
             fi
         done
@@ -139,7 +138,7 @@ function run_online() {
             awk '/disk/ {print "imgsnew["$3"]="$4}')
         for disc in ${!imgsnew[@]}; do
             if [[ ${imgs[$disc]} != ${imgsnew[$disc]} ]]; then
-                echo "Error while writing snapshot for VM ${vm} ${disc}"
+                logline "Error while writing snapshot for VM ${vm} ${disc}"
                 continue 2
             fi
         done
@@ -159,10 +158,10 @@ function run_online() {
 # Shutdown guests that need to be ofline for a backup
 #
 function shutdown_offline() {
-    draw_line
     declare -i count
 
     for exc in ${OFFLINE[@]}; do
+        logline "Shutting down '${exc}'"
         virsh shutdown ${exc}
         while true; do
             virsh list | grep "${exc}" >/dev/null 2>&1
@@ -174,7 +173,7 @@ function shutdown_offline() {
             let count=${count}+1
 
             if [[ ${count} -gt 300 ]]; then
-                echo "Failed to shutdown guest ${exc}"
+                logline "Failed to shutdown guest ${exc}"
 
                 exit 1
             fi
@@ -191,8 +190,7 @@ function run_offline() {
 
     for vm in $(virsh list --name --inactive); do
         unset imgs
-        draw_line
-        echo "Backup KVM guest '${vm}'"
+        logline "Backup KVM offline guest '${vm}'"
 
         # Get list of image names and paths
         declare -A imgs
@@ -225,8 +223,7 @@ function run_offline() {
 function encrypt() {
     # Enrypt and copy to $DSTEXT
     for vm in $(virsh list --name --all); do
-        draw_line
-        echo "Compress and encrypt data '${vm}'"
+        logline "Compress and encrypt data '${vm}'"
 
         (
             cd ${DST}
@@ -236,7 +233,7 @@ function encrypt() {
                     ${vm}.tar.7z
         )
 
-        echo "Copy 7z file to $DSTEXT"
+        logline "Copy 7z file to $DSTEXT"
         cp -f ${DST}/${vm}.tar.7z ${DSTEXT}/
     done
 }
@@ -246,8 +243,7 @@ function encrypt() {
 #
 function backup_local_dirs() {
     for dir in ${BACKUPDIRS[@]}; do
-        draw_line
-        echo "Backup '${dir}'"
+        logline "Backup '${dir}'"
         dirname=$(basename ${dir})
 
         [[ -f ${DST}/${dirname}.tar.7z ]] && rm -f ${DST}/${dirname}.tar.7z
@@ -256,7 +252,7 @@ function backup_local_dirs() {
             7z a -si -m0=lzma2 -mx=3 -bso0 -bsp0 -p$(< ${PASSPHRASE}) \
                 ${DST}/${dirname}.tar.7z
 
-        echo "Copy 7z file to $DSTEXT"
+        logline "Copy 7z file to $DSTEXT"
         cp -f ${DST}/${dirname}.tar.7z ${DSTEXT}/
     done
 }
@@ -265,12 +261,13 @@ for task in ${TASKS[@]}; do
     eval "${task}"
 done
 
+logline "Backup started"
 touch ${DST}/LATEST_${DATE}
 if [[ -n "$DSTEXT" ]]; then
     touch ${DSTEXT}/LATEST_${DATE}
 endif
+logline "Backup done"
 
-echo done
 exit 0
 
 # vim: set ai ts=4 sw=4 et sts=4 ft=sh:
