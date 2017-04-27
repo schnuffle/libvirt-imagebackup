@@ -139,7 +139,14 @@ function run_online() {
             mkdir -p ${DST}/${vm}/
             touch ${DST}/${vm}
             if [[ -f ${DST}/${vm}/$(basename ${img}) ]]; then
-                rm ${DST}/${vm}/$(basename ${img})
+		if [ -n ${HISTORY} ]; then
+		    if [[ -f ${DST}/${vm}/$(basename ${img}).1 ]]; then
+		 	rm ${DST}/${vm}/$(basename ${img}).1
+		    fi
+		    mv ${DST}/${vm}/$(basename ${img}) ${DST}/${vm}/$(basename ${img}).1
+		else
+   	            rm ${DST}/${vm}/$(basename ${img})
+	        fi
             fi
             rsync --progress --sparse ${img} ${DST}/${vm}/ 2>&1 | $LOGPARM
         done
