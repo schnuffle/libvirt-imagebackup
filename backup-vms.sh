@@ -95,6 +95,18 @@ function logline() {
 }
 
 #
+# Verify returncodes of a pipe an exit, if at least one is none zero
+#
+
+function exit_on_error() {
+	rcs=${PIPESTATUS[*]}; rc=0; for i in ${rcs}; do rc=$(($i > $rc ? $i : $rc)); done
+	if (( $rc != 0 )); then
+		logline "Error: Process $* exited with code $rc"
+		exit $rc
+	fi
+}
+
+#
 # Backup running guests
 #
 function run_online() {
@@ -128,6 +140,7 @@ function run_online() {
         # Create snapshots for all disks
         virsh snapshot-create-as ${vm} backup \
             --disk-only --atomic --no-metadata --quiesce 2>&1 | $LOGPARM
+	exit_on_error virsh snapshot-create
 
         # Remember backup file names for future removal
         declare -A imgsbackup
@@ -142,18 +155,22 @@ function run_online() {
 		if [ -n ${HISTORY} ]; then
 		    if [[ -f ${DST}/${vm}/$(basename ${img}).1 ]]; then
 		 	rm ${DST}/${vm}/$(basename ${img}).1
+			exit_on_error remove old backup
 		    fi
 		    mv ${DST}/${vm}/$(basename ${img}) ${DST}/${vm}/$(basename ${img}).1
+		    exit_on_error move old backup
 		else
    	            rm ${DST}/${vm}/$(basename ${img})
 	        fi
             fi
             rsync --progress --sparse ${img} ${DST}/${vm}/ 2>&1 | $LOGPARM
+	    exit_on_error rsync
         done
 
         # Merge snapshot file with original disk image
         for disc in ${!imgs[@]}; do
             virsh blockcommit ${vm} ${disc} --active --wait --pivot 2>&1 | $LOGPARM
+	    exit_on_error virsh blockcommit
         done
 
         # Test if all original disks are back in place
@@ -167,9 +184,19 @@ function run_online() {
             fi
         done
 
+	# Sanity check/cleanup that no original filename is in the backup array
+	for match in "${imgs[@]}"; do
+	    for i in "${!imgsbackup[@]}"; do
+	        if [[ ${imgsbackup[$i]} = "${match}" ]]; then
+		    unset "imgsbackup[$i]"
+    		fi
+	    done
+        done
+
         # Remove orphaned backup snapshot files
         for img in ${imgsbackup[@]}; do
             fuser -s ${img} || rm ${img}
+	    exit_on_error remove orphaned backup snapshots
         done
         unset imgsbackup
 
@@ -230,6 +257,7 @@ function run_offline() {
                 rm ${DST}/${vm}/$(basename ${img})
             fi
             rsync --progress --sparse ${img} ${DST}/${vm}/ | $LOGPARM
+	    exit_on_error rsync
         done
         # Save XML VM definition file
         virsh dumpxml ${vm} > ${DST}/${vm}/domain.xml
