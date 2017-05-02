@@ -26,6 +26,10 @@ CONFIG=/etc/backup-vms.conf
 
 if [ ! -n "$BASH" ] ;then echo Please run this script with bash; exit 1; fi
 
+command -v virsh >/dev/null 2>&1 || { echo >&2 "Libvirt not found.  Aborting."; exit 1; }
+command -v rsync >/dev/null 2>&1 || { echo >&2 "Rsync not found.  Aborting."; exit 1; }
+command -v 7z >/dev/null 2>&1 || { echo >&2 "7Zip not found.  Aborting."; exit 1; }
+
 if [[ ! -f $CONFIG ]]; then
     echo Config file $CONFIG not found.
     exit 1
@@ -53,6 +57,19 @@ for dir in ${BACKUPDIRS[@]}; do
     [ ! -d "$dir" ] && echo "BACKUPDIRS $dir not found" && exit 1
 done
 
+# If no passphrase is set, we still want to be able to backup local files
+if [ -z ${PASSPHRASE+x} ]; then
+    ZIPPASS=''
+else
+    ZIPPASS="-p${PASSPHRASE}"
+fi
+
+# Set optional Logfileparameter
+if [ -z ${LOG+x} ]; then
+    LOGPARM='tee'
+else
+    LOGPARM="tee -a $LOG"
+fi
 
 DATE=$(date +%Y%m%d)
 LOCK=/var/lock/${0##*/}
@@ -70,11 +87,23 @@ if [[ -n "$DSTEXT" ]]; then
     rm -f ${DSTEXT}/LATEST_*
 fi
 
-# 
+#
 # Logline
 #
 function logline() {
-    echo $(date -R) "$*"
+    echo $(date -R) "$*" | $LOGPARM
+}
+
+#
+# Verify returncodes of a pipe an exit, if at least one is none zero
+#
+
+function exit_on_error() {
+	rcs=${PIPESTATUS[*]}; rc=0; for i in ${rcs}; do rc=$(($i > $rc ? $i : $rc)); done
+	if (( $rc != 0 )); then
+		logline "Error: Process $* exited with code $rc"
+		exit $rc
+	fi
 }
 
 #
@@ -110,8 +139,9 @@ function run_online() {
 
         # Create snapshots for all disks
         virsh snapshot-create-as ${vm} backup \
-            --disk-only --atomic --no-metadata --quiesce
-        
+            --disk-only --atomic --no-metadata --quiesce 2>&1 | $LOGPARM
+	exit_on_error virsh snapshot-create
+
         # Remember backup file names for future removal
         declare -A imgsbackup
         eval $(virsh domblklist ${vm} --details \
@@ -122,14 +152,25 @@ function run_online() {
             mkdir -p ${DST}/${vm}/
             touch ${DST}/${vm}
             if [[ -f ${DST}/${vm}/$(basename ${img}) ]]; then
-                rm ${DST}/${vm}/$(basename ${img})
+		if [ -n ${HISTORY} ]; then
+		    if [[ -f ${DST}/${vm}/$(basename ${img}).1 ]]; then
+		 	rm ${DST}/${vm}/$(basename ${img}).1
+			exit_on_error remove old backup
+		    fi
+		    mv ${DST}/${vm}/$(basename ${img}) ${DST}/${vm}/$(basename ${img}).1
+		    exit_on_error move old backup
+		else
+   	            rm ${DST}/${vm}/$(basename ${img})
+	        fi
             fi
-            rsync --sparse ${img} ${DST}/${vm}/
+            rsync --progress --sparse ${img} ${DST}/${vm}/ 2>&1 | $LOGPARM
+	    exit_on_error rsync
         done
 
         # Merge snapshot file with original disk image
         for disc in ${!imgs[@]}; do
-            virsh blockcommit ${vm} ${disc} --active --wait --pivot
+            virsh blockcommit ${vm} ${disc} --active --wait --pivot 2>&1 | $LOGPARM
+	    exit_on_error virsh blockcommit
         done
 
         # Test if all original disks are back in place
@@ -143,14 +184,25 @@ function run_online() {
             fi
         done
 
+	# Sanity check/cleanup that no original filename is in the backup array
+	for match in "${imgs[@]}"; do
+	    for i in "${!imgsbackup[@]}"; do
+	        if [[ ${imgsbackup[$i]} = "${match}" ]]; then
+		    unset "imgsbackup[$i]"
+    		fi
+	    done
+        done
+
         # Remove orphaned backup snapshot files
         for img in ${imgsbackup[@]}; do
             fuser -s ${img} || rm ${img}
+	    exit_on_error remove orphaned backup snapshots
         done
         unset imgsbackup
 
         # Save XML VM definition file
         virsh dumpxml ${vm} > ${DST}/${vm}/domain.xml
+        logline "Backup KVM of '${vm}' complete"
     done
 }
 
@@ -196,7 +248,7 @@ function run_offline() {
         declare -A imgs
         eval $(virsh domblklist ${vm} --details \
                | awk '/disk/ {print "imgs["$3"]="$4}')
-        
+
         # Backup original disk image of the VM
         for img in ${imgs[@]}; do
             mkdir -p ${DST}/${vm}/
@@ -204,14 +256,15 @@ function run_offline() {
             if [[ -f ${DST}/${vm}/$(basename ${img}) ]]; then
                 rm ${DST}/${vm}/$(basename ${img})
             fi
-            rsync --sparse ${img} ${DST}/${vm}/
+            rsync --progress --sparse ${img} ${DST}/${vm}/ | $LOGPARM
+	    exit_on_error rsync
         done
         # Save XML VM definition file
         virsh dumpxml ${vm} > ${DST}/${vm}/domain.xml
 
         for exc in ${OFFLINE[@]}; do
             if [[ "${vm}" == "${exc}" ]]; then
-                virsh start ${exc}
+                virsh start ${exc} | $LOGPARM
             fi
         done
     done
@@ -230,11 +283,12 @@ function encrypt() {
             [[ -f ${vm}.tar.7z ]] && rm -f ${vm}.tar.7z
             tar cf - --sparse ${vm} | \
                 7z a -si -m0=lzma2 -mx=3 -bso0 -bsp0 -p$(< ${PASSPHRASE}) \
-                    ${vm}.tar.7z
+                    ${vm}.tar.7z | $LOGPARM
         )
-
-        logline "Copy 7z file to $DSTEXT"
-        cp -f ${DST}/${vm}.tar.7z ${DSTEXT}/
+	if [ -n $DSTEXT ]; then
+            logline "Copy 7z file to $DSTEXT"
+	    cp -f ${DST}/${vm}.tar.7z ${DSTEXT}/
+	fi
     done
 }
 
@@ -249,25 +303,27 @@ function backup_local_dirs() {
         [[ -f ${DST}/${dirname}.tar.7z ]] && rm -f ${DST}/${dirname}.tar.7z
 
         tar cpf - ${dir} 2>/dev/null | \
-            7z a -si -m0=lzma2 -mx=3 -bso0 -bsp0 -p$(< ${PASSPHRASE}) \
-                ${DST}/${dirname}.tar.7z
+            7z a -si -m0=lzma2 -mx=3 $ZIPPASS \
+                ${DST}/${dirname}.tar.7z 2>&1 | $LOGPARM
 
-        logline "Copy 7z file to $DSTEXT"
-        cp -f ${DST}/${dirname}.tar.7z ${DSTEXT}/
+	if [ -n "$DSTEXT" ]; then
+            logline "Copy 7z file to $DSTEXT"
+	    cp -f ${DST}/${dirname}.tar.7z ${DSTEXT}/ | $LOGPARM
+	fi
     done
 }
 
+logline "Backup started"
 for task in ${TASKS[@]}; do
     eval "${task}"
 done
 
-logline "Backup started"
 touch ${DST}/LATEST_${DATE}
 if [[ -n "$DSTEXT" ]]; then
     touch ${DSTEXT}/LATEST_${DATE}
-endif
+fi
 logline "Backup done"
+logline "-----------"
 
 exit 0
-
 # vim: set ai ts=4 sw=4 et sts=4 ft=sh:

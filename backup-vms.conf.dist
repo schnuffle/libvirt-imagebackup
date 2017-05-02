@@ -1,3 +1,6 @@
+### Log file ###
+
+#LOG=/var/log/backup-vms.log
 
 ### Local directories
 
