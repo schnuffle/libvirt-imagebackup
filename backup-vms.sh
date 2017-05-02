@@ -6,7 +6,7 @@
 #     Jens Tautenhahn <shogun@tausys.de>
 #     Christian Roessner <c@roessner.co>
 #
-# Contributors: Jan Wenzel
+# Contributors: Jan Wenzel, Oliver Guenther
 
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -26,50 +26,45 @@ CONFIG=/etc/backup-vms.conf
 
 if [ ! -n "$BASH" ] ;then echo Please run this script with bash; exit 1; fi
 
-command -v virsh >/dev/null 2>&1 || { echo >&2 "Libvirt not found.  Aborting."; exit 1; }
-command -v rsync >/dev/null 2>&1 || { echo >&2 "Rsync not found.  Aborting."; exit 1; }
-command -v 7z >/dev/null 2>&1 || { echo >&2 "7Zip not found.  Aborting."; exit 1; }
-
-if [[ ! -f $CONFIG ]]; then
-    echo Config file $CONFIG not found.
+#
+# Exit on config check
+#
+function exit_on_check() {
+    echo >&2 "$*"
     exit 1
-fi
+}
+
+command -v virsh >/dev/null 2>&1 || exit_on_check "Libvirt not found.  Aborting."
+command -v rsync >/dev/null 2>&1 || exit_on_check "Rsync not found.  Aborting."
+command -v 7z >/dev/null 2>&1 || exit_on_check "7Zip not found.  Aborting."
+
+[[ -f $CONFIG ]] || exit_on_check "Config file $CONFIG not found."
 source $CONFIG
 
 #
 # Config sanity checks
 #
 for var in DST; do
-    [ -z "${!var}" ] && echo "${var} is not set" && exit 1
+    [[ -n ${!var} ]] || exit_on_check "${var} is not set"
 done
-if [ -n "$DSTEXT" ]; then
-    [ -z "$PASSPHRASE" ] && echo "PASSPHRASE is not set" && exit 1
-    [ ! -f "${PASSPHRASE}" ] && echo "PASSPHRASE file not found" && exit 1
-    [ -z "$(which 7z)" ] && echo "7z not found" && exit 1
+if [[ -n $DSTEXT ]]; then
+    [[ -n $PASSPHRASE ]] || exit_on_check "PASSPHRASE is not set"
+    [[ -f $PASSPHRASE ]] || exit_on_check "PASSPHRASE file not found"
 fi
 for var in OFFLINE BACKUPDIRS TASKS; do
-    if [[ ! "$(declare -p $var 2> /dev/null)" =~ "declare -a" ]]; then
-        echo "$var must be an array"
-        exit 1
-    fi
+    [[ "$(declare -p $var 2> /dev/null)" =~ "declare -a" ]] || exit_on_check "$var must be an array"
 done
 for dir in ${BACKUPDIRS[@]}; do
-    [ ! -d "$dir" ] && echo "BACKUPDIRS $dir not found" && exit 1
+    [[ -d $dir ]] || exit_on_check "BACKUPDIRS $dir not found"
 done
 
 # If no passphrase is set, we still want to be able to backup local files
-if [ -z ${PASSPHRASE+x} ]; then
-    ZIPPASS=''
-else
-    ZIPPASS="-p${PASSPHRASE}"
-fi
+ZIPPASS=
+[[ -n ${PASSPHRASE} ]] && ZIPPASS="-p${PASSPHRASE}"
 
 # Set optional Logfileparameter
-if [ -z ${LOG+x} ]; then
-    LOGPARM='tee'
-else
-    LOGPARM="tee -a $LOG"
-fi
+LOGPARM=tee
+[[ -n ${LOG} ]] && LOGPARM="tee -a $LOG"
 
 DATE=$(date +%Y%m%d)
 LOCK=/var/lock/${0##*/}
@@ -95,15 +90,15 @@ function logline() {
 }
 
 #
-# Verify returncodes of a pipe an exit, if at least one is none zero
+# Verify returncodes of a pipe on exit, if at least one is none zero
 #
 
 function exit_on_error() {
-	rcs=${PIPESTATUS[*]}; rc=0; for i in ${rcs}; do rc=$(($i > $rc ? $i : $rc)); done
-	if (( $rc != 0 )); then
-		logline "Error: Process $* exited with code $rc"
-		exit $rc
-	fi
+    rcs=${PIPESTATUS[*]}; rc=0; for i in ${rcs}; do rc=$(($i > $rc ? $i : $rc)); done
+    if (( $rc != 0 )); then
+        logline "Error: Process $* exited with code $rc"
+        exit $rc
+    fi
 }
 
 #
@@ -140,7 +135,7 @@ function run_online() {
         # Create snapshots for all disks
         virsh snapshot-create-as ${vm} backup \
             --disk-only --atomic --no-metadata --quiesce 2>&1 | $LOGPARM
-	exit_on_error virsh snapshot-create
+        exit_on_error virsh snapshot-create
 
         # Remember backup file names for future removal
         declare -A imgsbackup
@@ -152,25 +147,25 @@ function run_online() {
             mkdir -p ${DST}/${vm}/
             touch ${DST}/${vm}
             if [[ -f ${DST}/${vm}/$(basename ${img}) ]]; then
-		if [ -n ${HISTORY} ]; then
-		    if [[ -f ${DST}/${vm}/$(basename ${img}).1 ]]; then
-		 	rm ${DST}/${vm}/$(basename ${img}).1
-			exit_on_error remove old backup
-		    fi
-		    mv ${DST}/${vm}/$(basename ${img}) ${DST}/${vm}/$(basename ${img}).1
-		    exit_on_error move old backup
-		else
-   	            rm ${DST}/${vm}/$(basename ${img})
-	        fi
+                if [ -n ${HISTORY} ]; then
+                    if [[ -f ${DST}/${vm}/$(basename ${img}).1 ]]; then
+                        rm ${DST}/${vm}/$(basename ${img}).1
+                        exit_on_error remove old backup
+                    fi
+                    mv ${DST}/${vm}/$(basename ${img}) ${DST}/${vm}/$(basename ${img}).1
+                    exit_on_error move old backup
+                else
+       	            rm ${DST}/${vm}/$(basename ${img})
+                fi
             fi
             rsync --progress --sparse ${img} ${DST}/${vm}/ 2>&1 | $LOGPARM
-	    exit_on_error rsync
+            exit_on_error rsync
         done
 
         # Merge snapshot file with original disk image
         for disc in ${!imgs[@]}; do
             virsh blockcommit ${vm} ${disc} --active --wait --pivot 2>&1 | $LOGPARM
-	    exit_on_error virsh blockcommit
+            exit_on_error virsh blockcommit
         done
 
         # Test if all original disks are back in place
@@ -184,19 +179,19 @@ function run_online() {
             fi
         done
 
-	# Sanity check/cleanup that no original filename is in the backup array
-	for match in "${imgs[@]}"; do
-	    for i in "${!imgsbackup[@]}"; do
-	        if [[ ${imgsbackup[$i]} = "${match}" ]]; then
-		    unset "imgsbackup[$i]"
-    		fi
-	    done
+        # Sanity check/cleanup that no original filename is in the backup array
+        for match in "${imgs[@]}"; do
+            for i in "${!imgsbackup[@]}"; do
+                if [[ ${imgsbackup[$i]} = "${match}" ]]; then
+                    unset "imgsbackup[$i]"
+                fi
+            done
         done
 
         # Remove orphaned backup snapshot files
         for img in ${imgsbackup[@]}; do
             fuser -s ${img} || rm ${img}
-	    exit_on_error remove orphaned backup snapshots
+            exit_on_error remove orphaned backup snapshots
         done
         unset imgsbackup
 
@@ -285,10 +280,10 @@ function encrypt() {
                 7z a -si -m0=lzma2 -mx=3 -bso0 -bsp0 -p$(< ${PASSPHRASE}) \
                     ${vm}.tar.7z | $LOGPARM
         )
-	if [ -n $DSTEXT ]; then
+        if [ -n $DSTEXT ]; then
             logline "Copy 7z file to $DSTEXT"
-	    cp -f ${DST}/${vm}.tar.7z ${DSTEXT}/
-	fi
+            cp -f ${DST}/${vm}.tar.7z ${DSTEXT}/
+        fi
     done
 }
 
@@ -306,10 +301,10 @@ function backup_local_dirs() {
             7z a -si -m0=lzma2 -mx=3 $ZIPPASS \
                 ${DST}/${dirname}.tar.7z 2>&1 | $LOGPARM
 
-	if [ -n "$DSTEXT" ]; then
+        if [ -n "$DSTEXT" ]; then
             logline "Copy 7z file to $DSTEXT"
-	    cp -f ${DST}/${dirname}.tar.7z ${DSTEXT}/ | $LOGPARM
-	fi
+            cp -f ${DST}/${dirname}.tar.7z ${DSTEXT}/ | $LOGPARM
+        fi
     done
 }
 
