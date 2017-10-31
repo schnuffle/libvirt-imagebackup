@@ -1,0 +1,69 @@
+#!/bin/bash
+
+CONF=/etc/backup-vms.conf
+SERVICE="Backup-Libvirt"
+
+function error() {
+	echo "2 $SERVICE count=-; $*"
+	exit 0
+}
+
+function warning() {
+	echo "1 $SERVICE count=-; $*"
+	exit 0;
+}
+
+function ok() {
+	echo "0 $SERVICE count=-; $*"
+	exit 0;
+}
+
+if [ ! -f $CONF ]; then
+	error "Config file $CONF not found"
+fi
+
+if [ ! -r $CONF ]; then
+	error "Config file $CONF not readable"
+fi
+
+source $CONF
+
+if [ -z ${DST+x} ]; then
+	error "Destination (Variable DST) in $CONF is not set"
+fi
+
+if [ ! -f ${DST}/STATUS ]; then
+	error "No Statusfile found, backup may never run"
+fi
+
+source ${DST}/STATUS
+
+if [[ $STATUS == "FAILED" ]]; then
+	error "Last Backup failed, see log for more details"
+fi
+
+if [[ $STATUS == "RUNNING" ]]; then
+	# Backup is runnig, check how long.
+	if (( $RUNTIME == 0 )); then
+		warning "Backup is running, but runtime is zero. Probably first run"
+	fi
+	if ((  (`date +%s` - $STARTED) * 2 > $RUNTIME )); then
+		error "Backup is still running more than double of last time. Probably stuck"
+	fi
+	if (( (`date +%s` -  $STARTED) * 12 / 10 > $RUNTIME )); then
+		warning "Backup is still running 20% longer than last time. May be stuck"
+	fi
+	ok "Backup is still running"
+fi
+
+if [[ $STATUS == "OK" ]]; then
+	if (( $STARTED <= $(date -d 'now - 8 days' +%s) )); then
+        	error "Last backup form `date --date=@$STARTED`, which is older than 8 days"
+	fi
+
+	if (( $STARTED <= $(date -d 'now - 4 days' +%s) )); then
+		warning "Last backup form `date --date=@$STARTED`, which is older than 4 days"
+	fi
+	ok "Last backup successful from `date --date=@$STARTED`"
+fi
+error "Something went wrong, last status is $STATUS"
