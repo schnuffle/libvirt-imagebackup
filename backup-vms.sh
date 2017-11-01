@@ -82,6 +82,13 @@ if [[ -n "$DSTEXT" ]]; then
     rm -f ${DSTEXT}/LATEST_*
 fi
 
+# Load last Runtime
+RUNTIME=0
+if [ -f ${DST}/STATUS ]; then
+    source ${DST}/STATUS
+fi
+STARTED=`date +%s`
+
 #
 # Logline
 #
@@ -89,16 +96,35 @@ function logline() {
     echo $(date -R) "$*" | $LOGPARM
 }
 
+function status_ok() {
+    echo STATUS=OK > ${DST}/STATUS
+    echo STARTED=$STARTED >> ${DST}/STATUS
+    echo RUNTIME=$((`date +%s` - $STARTED)) >> ${DST}/STATUS
+}
+
+function status_running() {
+    echo STATUS=RUNNING > ${DST}/STATUS
+    echo STARTED=$STARTED >> ${DST}/STATUS
+    echo RUNTIME=$RUNTIME >> ${DST}/STATUS
+}
+
+function status_failed() {
+    echo STATUS=FAILED > ${DST}/STATUS
+    echo STARTED=$STARTED >> ${DST}/STATUS
+    echo RUNTIME=$RUNTIME >> ${DST}/STATUS
+}
+
 #
 # Verify returncodes of a pipe on exit, if at least one is none zero
 #
 
 function exit_on_error() {
-    rcs=${PIPESTATUS[*]}; rc=0; for i in ${rcs}; do rc=$(($i > $rc ? $i : $rc)); done
-    if (( $rc != 0 )); then
-        logline "Error: Process $* exited with code $rc"
-        exit $rc
-    fi
+	rcs=${PIPESTATUS[*]}; rc=0; for i in ${rcs}; do rc=$(($i > $rc ? $i : $rc)); done
+	if (( $rc != 0 )); then
+		logline "Error: Process $* exited with code $rc"
+		status_failed
+		exit $rc
+	fi
 }
 
 #
@@ -309,6 +335,7 @@ function backup_local_dirs() {
 }
 
 logline "Backup started"
+status_running
 for task in ${TASKS[@]}; do
     eval "${task}"
 done
@@ -317,6 +344,7 @@ touch ${DST}/LATEST_${DATE}
 if [[ -n "$DSTEXT" ]]; then
     touch ${DSTEXT}/LATEST_${DATE}
 fi
+status_ok
 logline "Backup done"
 logline "-----------"
 
