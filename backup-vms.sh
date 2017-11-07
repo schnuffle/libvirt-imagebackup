@@ -137,6 +137,12 @@ function run_online() {
                 continue 2
             fi
         done
+        for excl in ${SKIP[@]}; do
+            if [[ "${vm}" == "${excl}" ]]; then
+                logline "Skipping ${vm}"
+                continue 2
+            fi
+        done
 
         unset imgs
         unset imgsnew
@@ -234,10 +240,17 @@ function shutdown_offline() {
     declare -i count
 
     for exc in ${OFFLINE[@]}; do
+        for excl in ${SKIP[@]}; do
+            if [[ "${exc}" == "${excl}" ]]; then
+                continue 2
+            fi
+        done
         logline "Shutting down '${exc}'"
         virsh shutdown ${exc}
+        count=0
         while true; do
-            virsh list | grep "${exc}" >/dev/null 2>&1
+            # fix problem with prefixes in vm-names (e.g. vms1 vs vms12)
+            virsh list | grep "${exc} " >/dev/null 2>&1
             if [[ "$?" -eq 1 ]]; then
                 break
             fi
@@ -247,7 +260,15 @@ function shutdown_offline() {
 
             if [[ ${count} -gt 300 ]]; then
                 logline "Failed to shutdown guest ${exc}"
-
+                for force in ${FORCE_SHUTDOWN[@]}; do
+                    if [[ "${force}" == "${exc}" ]]; then
+                        logline "Attempt to destroy ${exc}"
+                        virsh destroy ${exc}
+                        # wait an extra minute
+                        count=288
+                        continue 2
+                    fi
+                done
                 exit 1
             fi
         done
@@ -262,6 +283,13 @@ function run_offline() {
     shutdown_offline
 
     for vm in $(virsh list --name --inactive); do
+        for excl in ${SKIP[@]}; do
+            if [[ "${vm}" == "${excl}" ]]; then
+                logline "Skipping ${vm}"
+                continue 2
+            fi
+        done
+    
         unset imgs
         logline "Backup KVM offline guest '${vm}'"
 
