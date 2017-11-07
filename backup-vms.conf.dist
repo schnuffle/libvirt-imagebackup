@@ -24,6 +24,15 @@ OFFLINE=(
 #    "db.roessner-net.de"
 )
 
+# VMs that do not shutdown gracefully will be resetted by virsh destroy
+FORCE_SHUTDOWN=(
+#    "vms1"
+)
+
+# VMs to exclude from backup
+SKIP=(
+#    "vms1"
+)
 
 ### Local directories to backup
 
