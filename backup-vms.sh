@@ -70,6 +70,12 @@ LOGPARM=tee
 DATE=$(date +%Y%m%d)
 LOCK=/var/lock/${0##*/}
 
+# if ONE_FOLDER_PER_BACKUP is set to true, a new folder (based on the current timestamp) will be created for every backup.
+if [ "$ONE_FOLDER_PER_BACKUP" = true ] ; then
+    $DST=$DST+$DATE
+fi
+
+
 if ! mkdir $LOCK 2>/dev/null; then
     echo Already running or stale lock ${LOCK} exists. >&2
     exit 1
