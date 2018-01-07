@@ -7,6 +7,8 @@
 # local backup target directory
 DST=/var/backups/kvmvms
 
+# if ONE_FOLDER_PER_BACKUP is set to true, a new folder (based on the current timestamp) will be created for every backup.
+ONE_FOLDER_PER_BACKUP=false
 
 ### External backups. Uncomment if used.
 
@@ -16,8 +18,6 @@ DST=/var/backups/kvmvms
 # passphrase to encrypt remote backups
 #PASSPHRASE="${DST}/.passphrase"
 
-
-### VMs
 
 # VMs that do not have a Qemu-guest-agent and need to be offline for the backup
 OFFLINE=(
