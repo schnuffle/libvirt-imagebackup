@@ -10,6 +10,9 @@ DST=/var/backups/kvmvms
 # if ONE_FOLDER_PER_BACKUP is set to true, a new folder (based on the current timestamp) will be created for every backup.
 ONE_FOLDER_PER_BACKUP=false
 
+# name of 7zip binary (this is not the same on all systems)
+7ZBIN=7za
+
 ### External backups. Uncomment if used.
 
 # remote backup target directory
