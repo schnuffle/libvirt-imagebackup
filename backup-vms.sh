@@ -37,6 +37,7 @@ function exit_on_check() {
 command -v virsh >/dev/null 2>&1 || exit_on_check "Libvirt not found.  Aborting."
 command -v rsync >/dev/null 2>&1 || exit_on_check "Rsync not found.  Aborting."
 command -v 7z >/dev/null 2>&1 || exit_on_check "7Zip not found.  Aborting."
+command -v fuser >/dev/null 2>&1 || exit_on_check "fuser not found.  Aborting."
 
 [[ -f $CONFIG ]] || exit_on_check "Config file $CONFIG not found."
 source $CONFIG
