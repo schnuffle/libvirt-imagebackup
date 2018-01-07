@@ -34,16 +34,19 @@ function exit_on_check() {
     exit 1
 }
 
-command -v virsh >/dev/null 2>&1 || exit_on_check "Libvirt not found.  Aborting."
-command -v rsync >/dev/null 2>&1 || exit_on_check "Rsync not found.  Aborting."
-command -v 7z >/dev/null 2>&1 || exit_on_check "7Zip not found.  Aborting."
+#
+# Config sanity checks
+#
 
 [[ -f $CONFIG ]] || exit_on_check "Config file $CONFIG not found."
 source $CONFIG
 
-#
-# Config sanity checks
-#
+command -v virsh >/dev/null 2>&1 || exit_on_check "Libvirt not found.  Aborting."
+command -v rsync >/dev/null 2>&1 || exit_on_check "Rsync not found.  Aborting."
+command -v $ZIP_BIN >/dev/null 2>&1 || exit_on_check "7Zip not found.  Aborting."
+command -v fuser >/dev/null 2>&1 || exit_on_check "fuser not found.  Aborting."
+
+
 for var in DST; do
     [[ -n ${!var} ]] || exit_on_check "${var} is not set"
 done
@@ -67,7 +70,14 @@ LOGPARM=tee
 [[ -n ${LOG} ]] && LOGPARM="tee -a $LOG"
 
 DATE=$(date +%Y%m%d)
+TIMESTAMP=$(date +%s)
 LOCK=/var/lock/${0##*/}
+
+# if ONE_FOLDER_PER_BACKUP is set to true, a new folder (based on the current timestamp) will be created for every backup.
+if [ "$ONE_FOLDER_PER_BACKUP" = true ] ; then
+    DST=$DST/$TIMESTAMP
+fi
+
 
 if ! mkdir $LOCK 2>/dev/null; then
     echo Already running or stale lock ${LOCK} exists. >&2
@@ -331,7 +341,7 @@ function encrypt() {
             cd ${DST}
             [[ -f ${vm}.tar.7z ]] && rm -f ${vm}.tar.7z
             tar cf - --sparse ${vm} | \
-                7z a -si -m0=lzma2 -mx=3 -bso0 -bsp0 -p$(< ${PASSPHRASE}) \
+                $ZIP_BIN a -si -m0=lzma2 -mx=3 -bso0 -bsp0 -p$(< ${PASSPHRASE}) \
                     ${vm}.tar.7z | $LOGPARM
         )
         if [ -n $DSTEXT ]; then
@@ -352,7 +362,7 @@ function backup_local_dirs() {
         [[ -f ${DST}/${dirname}.tar.7z ]] && rm -f ${DST}/${dirname}.tar.7z
 
         tar cpf - ${dir} 2>/dev/null | \
-            7z a -si -m0=lzma2 -mx=3 $ZIPPASS \
+            $ZIP_BIN a -si -m0=lzma2 -mx=3 $ZIPPASS \
                 ${DST}/${dirname}.tar.7z 2>&1 | $LOGPARM
 
         if [ -n "$DSTEXT" ]; then
