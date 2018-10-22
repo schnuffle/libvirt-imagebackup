@@ -6,7 +6,7 @@
 #     Jens Tautenhahn <shogun@tausys.de>
 #     Christian Roessner <c@roessner.co>
 #
-# Contributors: Jan Wenzel, Oliver Guenther
+# Contributors: Jan Wenzel, Oliver Guenther, Stephan Eisvogel
 
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -162,7 +162,7 @@ function run_online() {
         # Get list of disk names and image paths
         declare -A imgs
         eval $(virsh domblklist ${vm} --details \
-                | awk '/^file +disk/ {print "imgs["$3"]="$4}')
+                | awk '/^[[:space:]]*file[[:space:]]+disk/ {print "imgs["$3"]="$4}')
 
         # Test if there exists already a file with extension .backup
         for img in ${imgs[@]}; do
