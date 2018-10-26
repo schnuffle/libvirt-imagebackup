@@ -182,7 +182,7 @@ function run_online() {
         # Remember backup file names for future removal
         declare -A imgsbackup
         eval $(virsh domblklist ${vm} --details \
-            | awk '/^file +disk/ {print "imgsbackup["$3"]="$4}')
+            | awk '/^[[:space:]]*file[[:space:]]+disk/ {print "imgsbackup["$3"]="$4}')
 
         # Backup original disk image of the VM
         for img in ${imgs[@]}; do
@@ -213,7 +213,7 @@ function run_online() {
         # Test if all original disks are back in place
         declare -A imgsnew
         eval $(virsh domblklist ${vm} --details | \
-            awk '/^file +disk/ {print "imgsnew["$3"]="$4}')
+            awk '/^[[:space:]]*file[[:space:]]+disk/ {print "imgsnew["$3"]="$4}')
         for disc in ${!imgsnew[@]}; do
             if [[ ${imgs[$disc]} != ${imgsnew[$disc]} ]]; then
                 logline "Error while writing snapshot for VM ${vm} ${disc}"
@@ -306,7 +306,7 @@ function run_offline() {
         # Get list of image names and paths
         declare -A imgs
         eval $(virsh domblklist ${vm} --details \
-               | awk '/^file +disk/ {print "imgs["$3"]="$4}')
+               | awk '/^[[:space:]]*file[[:space:]]+disk/ {print "imgs["$3"]="$4}')
 
         # Backup original disk image of the VM
         for img in ${imgs[@]}; do
